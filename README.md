@@ -11,10 +11,10 @@ de datos ya queda preparada para ella.
 
 ```
                         ┌──────────────────────────────┐
-   Lectores  ──────────►│ CloudFront + WAF (rate limit)│──► S3 news-public-app  (privado, OAC)
+   Lectores  ──────────►│ CloudFront + WAF (rate limit)│──► S3 news-now-public-app (privado, OAC)
                         └──────────────────────────────┘
                         ┌──────────────────────────────┐
-   Redacción ──────────►│ CloudFront                   │──► S3 news-admin-app   (privado, OAC)
+   Redacción ──────────►│ CloudFront                   │──► S3 news-now-admin-app  (privado, OAC)
                         └──────────────────────────────┘
                         ┌──────────────────────────────┐
    Ambas SPAs ─────────►│ CloudFront  (cachea GET      │──► API Gateway HTTP API
@@ -256,8 +256,8 @@ ambas versiones mayores.
 
 - `cors_allow_origins` está en `["*"]`; restringirlo a los dos dominios
   CloudFront reales.
-- Revisar que los nombres de bucket globales (`news-public-app`,
-  `news-admin-app`, `news-now-terraform-state`) estén libres.
+- Revisar que los nombres de bucket globales (`news-now-public-app`,
+  `news-now-admin-app`, `news-now-terraform-state`) estén libres.
 - `GET /articles` sin filtro hace `Scan` paginado. Es adecuado para el volumen
   de un MVP y va amortiguado por la caché, pero cuando crezca el archivo la
   portada deberá pedir un `publish_date` concreto y pasar por el GSI.

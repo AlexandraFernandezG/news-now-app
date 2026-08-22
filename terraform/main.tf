@@ -1,8 +1,8 @@
 ###############################################################################
 # NewsNow - Fase 1: infraestructura base
 #
-#   Lectores  -> CloudFront (+WAF) -> S3 news-public-app        (SPA publica)
-#   Redaccion -> CloudFront        -> S3 news-admin-app         (SPA admin)
+#   Lectores  -> CloudFront (+WAF) -> S3 news-now-public-app    (SPA publica)
+#   Redaccion -> CloudFront        -> S3 news-now-admin-app     (SPA admin)
 #   Ambas     -> CloudFront (cache GET /articles)
 #                  -> API Gateway HTTP API (JWT authorizer Cognito)
 #                     -> 4 Lambdas Python -> DynamoDB `articles` (+ Streams)

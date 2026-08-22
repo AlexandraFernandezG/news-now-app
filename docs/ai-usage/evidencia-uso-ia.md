@@ -114,7 +114,7 @@ Puntos que la IA dejó abiertos a propósito y que requieren una decisión human
 
 1. `cors_allow_origins` está en `["*"]`. Restringir a los dos dominios
    CloudFront reales una vez desplegados.
-2. Los nombres `news-public-app`, `news-admin-app` y
+2. Los nombres `news-now-public-app`, `news-now-admin-app` y
    `news-now-terraform-state` son globales en S3. Si están ocupados, hay que
    cambiarlos (y ajustar `backend.tf` en el caso del state).
 3. `github_repository` en bootstrap está vacío: sin rellenar no existe rol de
