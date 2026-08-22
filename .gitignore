@@ -1,6 +1,16 @@
 # Local .terraform directories
 .terraform/
 
+# Artefactos de empaquetado de las Lambdas (los genera archive_file)
+terraform/modules/lambda-function/.build/
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
 # .tfstate files
 *.tfstate
 *.tfstate.*

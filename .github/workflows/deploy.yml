@@ -1,0 +1,228 @@
+name: deploy
+
+# CI/CD con OIDC: GitHub Actions asume un rol de AWS mediante un token de
+# corta duracion. No hay claves de acceso almacenadas como secretos.
+#
+# El rol lo crea terraform/bootstrap (variable `github_repository`) y su ARN
+# se publica en el output `github_actions_role_arn`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Un solo despliegue a la vez: evita choques con el lock del state remoto.
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  TF_VERSION: "1.15.9"
+  TF_WORKING_DIR: terraform
+  PYTHON_VERSION: "3.12"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validar codigo e infraestructura
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Sin dependencias externas: los handlers solo usan boto3, que ya viene
+      # incluido en el runtime de Lambda.
+      - name: Comprobar sintaxis de los handlers
+        run: python -m compileall -q src
+
+      - name: Configurar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Formato
+        run: terraform fmt -check -recursive
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      # -backend=false: la validacion no necesita state ni credenciales.
+      - name: Init (sin backend)
+        run: terraform init -backend=false -input=false
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Validate
+        run: terraform validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+  plan:
+    name: Plan
+    needs: validate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Asumir rol de AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init
+        run: terraform init -input=false
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Plan
+        id: plan
+        run: terraform plan -input=false -no-color -out=tfplan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Publicar el plan en la PR
+        uses: actions/github-script@v7
+        env:
+          PLAN: ${{ steps.plan.outputs.stdout }}
+        with:
+          script: |
+            const plan = (process.env.PLAN || '').slice(0, 60000)
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `#### terraform plan\n\n<details><summary>Ver plan</summary>\n\n\`\`\`hcl\n${plan}\n\`\`\`\n\n</details>`
+            })
+
+  apply:
+    name: Apply
+    needs: validate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      public_bucket: ${{ steps.outputs.outputs.public_bucket }}
+      admin_bucket: ${{ steps.outputs.outputs.admin_bucket }}
+      public_distribution: ${{ steps.outputs.outputs.public_distribution }}
+      admin_distribution: ${{ steps.outputs.outputs.admin_distribution }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Asumir rol de AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init
+        run: terraform init -input=false
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Apply
+        run: terraform apply -input=false -auto-approve
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Exportar outputs
+        id: outputs
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "public_bucket=$(terraform output -raw public_app_bucket)" >> "$GITHUB_OUTPUT"
+          echo "admin_bucket=$(terraform output -raw admin_app_bucket)" >> "$GITHUB_OUTPUT"
+          echo "public_distribution=$(terraform output -raw public_app_distribution_id)" >> "$GITHUB_OUTPUT"
+          echo "admin_distribution=$(terraform output -raw admin_app_distribution_id)" >> "$GITHUB_OUTPUT"
+
+  frontends:
+    name: Publicar SPAs
+    needs: apply
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      matrix:
+        include:
+          - name: public
+            path: apps/public
+            bucket: ${{ needs.apply.outputs.public_bucket }}
+            distribution: ${{ needs.apply.outputs.public_distribution }}
+          - name: admin
+            path: apps/admin
+            bucket: ${{ needs.apply.outputs.admin_bucket }}
+            distribution: ${{ needs.apply.outputs.admin_distribution }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Las apps React no forman parte de la Fase 1: el job se salta solo
+      # mientras el directorio no exista en el repositorio.
+      - name: Comprobar si la app existe
+        id: exists
+        run: |
+          if [ -f "${{ matrix.path }}/package.json" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.path }} todavia no existe; se omite la publicacion."
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.exists.outputs.found == 'true'
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ${{ matrix.path }}/package-lock.json
+
+      - name: Build
+        if: steps.exists.outputs.found == 'true'
+        working-directory: ${{ matrix.path }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Asumir rol de AWS via OIDC
+        if: steps.exists.outputs.found == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Los assets con hash en el nombre se cachean un ano; index.html no se
+      # cachea nunca para que el despliegue sea visible de inmediato.
+      - name: Sincronizar con S3
+        if: steps.exists.outputs.found == 'true'
+        working-directory: ${{ matrix.path }}
+        run: |
+          aws s3 sync dist "s3://${{ matrix.bucket }}" \
+            --delete \
+            --exclude index.html \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp dist/index.html "s3://${{ matrix.bucket }}/index.html" \
+            --cache-control "no-cache,no-store,must-revalidate"
+
+      - name: Invalidar CloudFront
+        if: steps.exists.outputs.found == 'true'
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ matrix.distribution }}" \
+            --paths "/index.html"
