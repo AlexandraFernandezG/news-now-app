@@ -20,15 +20,14 @@ variable "runtime" {
   default     = "python3.12"
 }
 
-variable "source_dir" {
-  description = "Directorio que se empaqueta como codigo de la funcion."
-  type        = string
-}
-
-variable "source_excludes" {
-  description = "Patrones excluidos del zip de despliegue."
-  type        = list(string)
-  default     = ["**/__pycache__/**", "**/*.pyc", "**/tests/**"]
+variable "source_files" {
+  description = <<-EOT
+    Ficheros que componen el paquete de despliegue, como mapa
+    'ruta dentro del zip' -> 'ruta absoluta en disco'. Solo se incluyen estos
+    ficheros: cada Lambda empaqueta unicamente su propio handler mas el codigo
+    comun que necesita, nunca el codigo de las otras operaciones del CRUD.
+  EOT
+  type = map(string)
 }
 
 variable "memory_size" {

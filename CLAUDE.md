@@ -33,6 +33,10 @@ terraform fmt -recursive terraform/
 # Sintaxis de los handlers (no hay dependencias que instalar: boto3 lo aporta
 # el runtime de Lambda)
 python -m compileall -q src
+
+# Tests de los handlers (pytest + boto3 son solo para esto, nunca se despliegan)
+python -m venv .venv && .venv/Scripts/pip install -r requirements-test.txt
+.venv/Scripts/pytest
 ```
 
 Para un `plan` de la raíz antes de que exista el bucket de state, crear un
@@ -41,11 +45,16 @@ Para un `plan` de la raíz antes de que exista el bucket de state, crear un
 
 ## Cómo está montado
 
-**Empaquetado de las Lambdas.** Las cuatro comparten el mismo zip: `archive_file`
-comprime **todo `src/`**, por eso los handlers se declaran como
-`articles.<módulo>.lambda_handler` y pueden hacer `from common.db import …`.
-Un handler nuevo va en `src/articles/` y se instancia con el módulo
-`lambda-function`; no hay que tocar el empaquetado.
+**Empaquetado de las Lambdas.** Cada una lleva su propio zip, construido
+fichero a fichero (`archive_file` con `source` dinámico, no `source_dir`): el
+paquete de cada función contiene únicamente `common/` + su propio handler,
+nunca el código de las otras operaciones del CRUD. La lista de ficheros vive
+en `main.tf` (`source_files` de cada módulo), no en el módulo `lambda-function`
+en sí. Un handler nuevo va en `src/articles/`, se declara como
+`articles.<módulo>.lambda_handler` y su módulo en `main.tf` debe listar
+explícitamente los ficheros que necesita — si importa algo nuevo de `common/`,
+hay que añadirlo también a `source_files` o el `import` fallará en runtime
+aunque `compileall` no lo detecte (compila `src/` entero, no el paquete real).
 
 **Módulo `lambda-function`.** Crea función + rol + log group juntos. Los
 permisos concretos llegan por `policy_statements` (lista de objetos
@@ -82,3 +91,4 @@ las credenciales con las que se despliega.
 | [terraform/api_cache_cloudfront.tf](terraform/api_cache_cloudfront.tf) | La interacción entre `path_pattern` y `cached_methods` es sutil: un cambio descuidado rompe `POST /articles` |
 | [terraform/dynamodb.tf](terraform/dynamodb.tf) | Cambiar claves o streams recrea la tabla; tiene `prevent_destroy` |
 | [src/common/responses.py](src/common/responses.py) | Formato de respuesta y serialización de `Decimal`, compartidos por los cuatro handlers |
+| [tests/conftest.py](tests/conftest.py) | Fixture `mock_table` mockea `common.db.get_table()`; los tests no tocan DynamoDB real |

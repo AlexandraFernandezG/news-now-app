@@ -71,9 +71,11 @@ sobre `*`. Como los log groups se crean explícitamente en Terraform, cada rol
 lleva una política inline con `CreateLogStream`/`PutLogEvents` acotada a su
 propio log group.
 
-## 4. Verificación ejecutada
+## 4. Verificación ejecutada (entrega inicial)
 
-No se hizo `apply`: nada se ha creado en AWS.
+En el momento de esta entrega no se hizo `apply`: nada se había creado en AWS
+todavía. El despliegue real contra una cuenta AWS se hizo después, en una
+sesión de continuación — ver [sección 7](#7-continuación-despliegue-contra-una-cuenta-aws-real).
 
 ```
 terraform fmt -check -recursive terraform/     → OK
@@ -122,3 +124,79 @@ Puntos que la IA dejó abiertos a propósito y que requieren una decisión human
 4. `terraform plan` no valida permisos IAM en tiempo de ejecución. La política
    mínima de cada Lambda debería contrastarse contra CloudTrail tras el primer
    despliegue real.
+
+## 7. Continuación: despliegue contra una cuenta AWS real
+
+Misma sesión, mismo día, una vez decidido probar contra una cuenta real.
+Reparto de responsabilidad, explícito desde el primer mensaje del usuario:
+
+- **Bootstrap** (`terraform/bootstrap/`): lo aplicó Claude Code, con
+  confirmación expresa del usuario antes de ejecutar nada (comprobación
+  previa de que el nombre de bucket y el de la tabla estaban libres, y
+  confirmación de región). 8 recursos creados en `eu-west-1`.
+- **Stack de aplicación** (`terraform/`): el usuario pidió explícitamente
+  ejecutar él mismo los `terraform apply` — *"si, pero yo ejecuto el terraform
+  apply"*. Desde ese momento, el trabajo de Claude en esta carpeta se limitó a
+  `init`/`validate`/`plan` (solo lectura) para preparar y verificar cada
+  cambio antes de que el usuario lo aplicara en su propia terminal.
+
+### Troubleshooting durante el primer `apply` del usuario
+
+El primer `terraform apply` del stack de aplicación, ejecutado por el
+usuario, terminó con errores parciales: solo 2 de las 4 Lambdas quedaron
+creadas. El usuario pegó el error completo de su terminal.
+
+**Diagnóstico correcto, tras ver el error real.** Antes de tener el texto del
+error, la primera hipótesis fue *throttling* de la API de IAM al crear 4
+roles en paralelo — una suposición razonable pero **incorrecta**, y así quedó
+dicho en cuanto el usuario compartió el error real. El error real era otro:
+`ValidationError` de IAM y de CloudWatch Logs porque el tag `Route =
+"PUT /articles/{id}"` (y su equivalente en `delete_article`) contenía llaves
+`{ }`, un carácter que el regex de AWS para valores de tag no admite. Por eso
+fallaban justo esas dos Lambdas: son las únicas dos rutas con parámetro en el
+path. Fix: cambiar el valor del tag a `PUT /articles/:id` /
+`DELETE /articles/:id` (los dos puntos sí están permitidos); el `route_key`
+real de API Gateway, que sí necesita la sintaxis `{id}`, no se tocó porque no
+es un tag y no le aplica esa restricción.
+
+**Empaquetado de las Lambdas, a petición del usuario.** El usuario detectó
+—inspeccionando el código desplegado— que el zip de cada Lambda contenía los
+4 handlers del CRUD en lugar de solo el suyo (p. ej. la función
+`create-article` incluía también `delete_article.py`, `get_articles.py` y
+`update_article.py`). Correcto: el módulo `lambda-function` comprimía
+`src/` entero con `archive_file source_dir` para poder compartir `common/`
+entre las 4 funciones, y eso arrastraba también el código de las otras tres
+operaciones. Se comprobó primero que ningún handler importa código de otro
+handler (solo de `common/`), y se cambió el empaquetado de `source_dir` a
+`source_files` (mapa fichero a fichero), de forma que cada zip incluye
+únicamente `common/db.py` + `common/responses.py` + su propio handler.
+Verificado con `unzip -l` sobre los 4 zips generados.
+
+En ambos casos: Claude diagnosticó, corrigió el código y verificó con
+`terraform validate` / `terraform plan` (lectura); el usuario aplicó el fix
+ejecutando `terraform apply` en su propia terminal.
+
+## 8. Unit tests de los handlers (con mocks)
+
+A petición del usuario, tests para las 4 Lambdas del CRUD (`tests/`), con la
+tabla DynamoDB sustituida por un `MagicMock` (fixture `mock_table` en
+`tests/conftest.py`, que parchea `common.db.get_table`) — sin `moto`, sin
+tocar AWS. Se creó un entorno virtual local (`.venv/`, en `.gitignore`) e
+instalaron `pytest` y `boto3` como dependencias de test para poder ejecutar y
+verificar la suite de verdad en esta sesión, no solo generarla.
+
+**Resultado, verificado ejecutando `pytest --cov`:** 57 tests, **100% de
+cobertura de líneas** en los 4 handlers. El primer barrido de tests dejó un
+92% de cobertura; las ramas que faltaban (errores de `ClientError` con
+códigos distintos al esperado, cuerpos en base64 corruptos, JSON que no es un
+objeto, algunas validaciones de longitud en `update_article`) se identificaron
+con `--cov-report=term-missing` y se completaron con tests adicionales hasta
+cubrirlas todas.
+
+**Novedad:** el proyecto no tenía hasta ahora un mecanismo de test para
+`src/articles/`; se cubrió con `pytest.ini` (`testpaths = tests`) y
+`requirements-test.txt`, y se añadió el paso `pytest -v` al job `validate` de
+`.github/workflows/deploy.yml`, antes del `terraform validate`. `boto3` y
+`pytest` son dependencias de desarrollo únicamente: el empaquetado de cada
+Lambda (`source_files` en `terraform/main.tf`) sigue listando ficheros de
+`src/` explícitamente, así que nunca viajan en un zip de despliegue.

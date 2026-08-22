@@ -44,6 +44,13 @@ jobs:
       - name: Comprobar sintaxis de los handlers
         run: python -m compileall -q src
 
+      # pytest y boto3 son solo para esto: nunca viajan en el zip de una
+      # Lambda (ver requirements-test.txt y el empaquetado en terraform/main.tf).
+      - name: Tests de los handlers
+        run: |
+          pip install -r requirements-test.txt
+          pytest -v
+
       - name: Configurar Terraform
         uses: hashicorp/setup-terraform@v3
         with:

@@ -86,9 +86,12 @@ news-now-app/
 ├── src/
 │   ├── articles/                  # los 4 handlers del CRUD
 │   └── common/                    # db.py (DynamoDB) · responses.py (HTTP)
+├── tests/                         # unit tests de los 4 handlers, DynamoDB mockeada
 ├── ai-summarizer/                 # Fase 2 — stubs, sin implementar
 ├── docs/ai-usage/                 # prompts y evidencia de uso de IA
 ├── .github/workflows/deploy.yml   # CI/CD con OIDC
+├── requirements-test.txt          # deps solo para tests (pytest, boto3)
+├── pytest.ini
 └── CLAUDE.md
 ```
 
@@ -195,6 +198,35 @@ Cualquier campo no reconocido produce `400`.
 **Errores**: `400` validación · `401` token ausente o inválido (lo emite API
 Gateway) · `404` artículo inexistente · `409` colisión al crear · `500`
 inesperado. El cuerpo es siempre `{ "message": "...", "details": {...} }`.
+
+---
+
+## Tests
+
+Unit tests de los 4 handlers en `tests/`, con la tabla DynamoDB mockeada
+(`unittest.mock`, sin `moto` ni AWS real) — verifican validación, construcción
+de las llamadas a DynamoDB y traducción de errores a códigos HTTP.
+
+```bash
+python -m venv .venv
+.venv/Scripts/pip install -r requirements-test.txt   # solo pytest + boto3
+.venv/Scripts/pytest -v
+```
+
+`boto3` y `pytest` son dependencias de test únicamente: nunca viajan en el zip
+de una Lambda (el empaquetado en `terraform/main.tf` lista los ficheros de
+`src/` explícitamente, ver [CLAUDE.md](CLAUDE.md)), y en producción `boto3` lo
+aporta el propio runtime de Lambda.
+
+| Fichero | Qué cubre |
+|---|---|
+| `tests/conftest.py` | Fixtures: `mock_table` (mockea `common.db.get_table`), `event_factory` (eventos de API Gateway HTTP API) |
+| `tests/test_get_articles.py` | Scan vs. Query al GSI, paginación, validación de `limit`/`publish_date`/cursor |
+| `tests/test_create_article.py` | Alta, valores por defecto, autoría desde el JWT (nunca desde el body), validaciones, `409` en duplicado |
+| `tests/test_update_article.py` | Actualización parcial, reinicio de `summary_status` al tocar `title`/`content`, `404` en inexistente |
+| `tests/test_delete_article.py` | Borrado condicional, `404` en inexistente |
+
+57 tests, 100% de cobertura de líneas en los 4 handlers (`pytest --cov=articles`).
 
 ---
 
