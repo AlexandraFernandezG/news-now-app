@@ -182,7 +182,6 @@ Base: el output `api_url` (CloudFront). El endpoint directo del API Gateway
 {
   "title": "Titular",
   "content": "Cuerpo del artículo",
-  "excerpt": "Entradilla",
   "image_url": "https://…",
   "tags": ["politica"],
   "status": "published",

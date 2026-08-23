@@ -21,7 +21,7 @@ from common.responses import ApiError, created, from_exception, get_logger
 logger = get_logger(__name__)
 
 REQUIRED_FIELDS = ("title", "content")
-OPTIONAL_FIELDS = ("publish_date", "tags", "status", "image_url", "excerpt")
+OPTIONAL_FIELDS = ("publish_date", "tags", "status", "image_url")
 
 MAX_TITLE_LENGTH = 200
 MAX_CONTENT_LENGTH = 100_000
@@ -42,7 +42,6 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             "id": article_id,
             "title": payload["title"],
             "content": payload["content"],
-            "excerpt": payload.get("excerpt", ""),
             "image_url": payload.get("image_url", ""),
             "tags": payload.get("tags", []),
             "status": payload.get("status", "published"),

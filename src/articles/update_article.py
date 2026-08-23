@@ -24,7 +24,6 @@ logger = get_logger(__name__)
 UPDATABLE_FIELDS = (
     "title",
     "content",
-    "excerpt",
     "image_url",
     "tags",
     "status",
