@@ -1,9 +1,8 @@
-# NewsNow — Fase 1: infraestructura base
+# NewsNow
 
-MVP de un periódico digital sobre AWS, íntegramente serverless. Esta fase
-entrega la infraestructura como código y la API de artículos. La capa de IA
-(resúmenes) corresponde a la Fase 2 y **no** está implementada, aunque la base
-de datos ya queda preparada para ella.
+MVP de un periódico digital sobre AWS, íntegramente serverless. **Fase 1**:
+infraestructura como código y la API de artículos. **Fase 2**: capa de IA
+sobre Amazon Bedrock — resumen automático por artículo y digest diario.
 
 ---
 
@@ -73,6 +72,16 @@ news-now-app/
 │   ├── modules/
 │   │   ├── lambda-function/       # Lambda + rol IAM propio + log group
 │   │   └── static-site/           # S3 privado + OAC + CloudFront con fallback SPA
+│   ├── ai/                        # Fase 2 — stack independiente (estado propio)
+│   │   ├── bedrock_iam.tf         # policies IAM de summarize_article y daily_digest
+│   │   ├── dynamodb_digests.tf    # tabla digests
+│   │   ├── summarize_article.tf   # Lambda + DLQ (SQS) + event source mapping del stream
+│   │   ├── daily_digest.tf        # Lambda + rol + EventBridge Scheduler (cron diario)
+│   │   ├── alarms.tf              # alarma de errores de summarize_article
+│   │   ├── main.tf                # providers, data source de la tabla articles, locals
+│   │   ├── backend.tf             # backend S3 (key propia, mismo bucket que la Fase 1)
+│   │   ├── variables.tf
+│   │   └── outputs.tf
 │   ├── main.tf                    # providers, locals, instanciación de módulos
 │   ├── backend.tf                 # backend S3 → recursos del bootstrap
 │   ├── api_gateway.tf             # HTTP API, JWT authorizer, rutas, stage
@@ -87,10 +96,13 @@ news-now-app/
 │   ├── articles/                  # los 4 handlers del CRUD
 │   └── common/                    # db.py (DynamoDB) · responses.py (HTTP)
 ├── tests/                         # unit tests de los 4 handlers, DynamoDB mockeada
-├── ai-summarizer/                 # Fase 2 — stubs, sin implementar
+├── ai-summarizer/                 # Fase 2 — handlers de la capa de IA
+│   ├── summarize_article.py       # consumidor del stream, Bedrock Haiku
+│   ├── daily_digest.py            # disparado por EventBridge Scheduler, Bedrock Sonnet
+│   └── tests/                     # moto (DynamoDB) + mocks de la respuesta de Bedrock
 ├── docs/ai-usage/                 # prompts y evidencia de uso de IA
 ├── .github/workflows/deploy.yml   # CI/CD con OIDC
-├── requirements-test.txt          # deps solo para tests (pytest, boto3)
+├── requirements-test.txt          # deps solo para tests (pytest, boto3, moto)
 ├── pytest.ini
 └── CLAUDE.md
 ```
@@ -202,20 +214,22 @@ inesperado. El cuerpo es siempre `{ "message": "...", "details": {...} }`.
 
 ## Tests
 
-Unit tests de los 4 handlers en `tests/`, con la tabla DynamoDB mockeada
-(`unittest.mock`, sin `moto` ni AWS real) — verifican validación, construcción
-de las llamadas a DynamoDB y traducción de errores a códigos HTTP.
+`pytest.ini` cubre dos suites (`testpaths = tests ai-summarizer/tests`):
 
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install -r requirements-test.txt   # solo pytest + boto3
+.venv/Scripts/pip install -r requirements-test.txt   # pytest + boto3 + moto
 .venv/Scripts/pytest -v
 ```
 
-`boto3` y `pytest` son dependencias de test únicamente: nunca viajan en el zip
-de una Lambda (el empaquetado en `terraform/main.tf` lista los ficheros de
-`src/` explícitamente, ver [CLAUDE.md](CLAUDE.md)), y en producción `boto3` lo
-aporta el propio runtime de Lambda.
+`boto3`, `pytest` y `moto` son dependencias de test únicamente: nunca viajan
+en el zip de una Lambda (el empaquetado en `terraform/main.tf` y
+`terraform/ai/*.tf` lista los ficheros explícitamente, ver
+[CLAUDE.md](CLAUDE.md)), y en producción `boto3` lo aporta el propio runtime
+de Lambda.
+
+**`tests/`** — los 4 handlers del CRUD, tabla DynamoDB mockeada con
+`unittest.mock` (sin `moto`, sin AWS real):
 
 | Fichero | Qué cubre |
 |---|---|
@@ -225,7 +239,17 @@ aporta el propio runtime de Lambda.
 | `tests/test_update_article.py` | Actualización parcial, reinicio de `summary_status` al tocar `title`/`content`, `404` en inexistente |
 | `tests/test_delete_article.py` | Borrado condicional, `404` en inexistente |
 
-57 tests, 100% de cobertura de líneas en los 4 handlers (`pytest --cov=articles`).
+**`ai-summarizer/tests/`** — los 2 handlers de la Fase 2, DynamoDB simulada
+con `moto` y la respuesta de Bedrock mockeada a mano (`moto` no cubre
+`bedrock-runtime`):
+
+| Fichero | Qué cubre |
+|---|---|
+| `ai-summarizer/tests/test_summarize_article.py` | `PENDING` → procesado → `DONE`; `DONE` se ignora (evita el bucle); fallo de Bedrock → `ERROR` + relanza la excepción; `REMOVE` se ignora |
+| `ai-summarizer/tests/test_daily_digest.py` | El filtro `summary_status = DONE` excluye lo no resumido; la Query queda acotada a `publish_date`; sin artículos resumidos no se genera digest |
+
+65 tests (57 CRUD + 8 IA), 100% de cobertura de líneas en los 4 handlers del
+CRUD (`pytest --cov=articles`).
 
 ---
 
@@ -247,17 +271,57 @@ que no forman parte de la Fase 1.
 
 ---
 
-## Fase 2 — qué queda preparado
+## Fase 2 — capa de IA
 
-| Pieza | Output de Terraform |
+Stack independiente en `terraform/ai/` (estado propio, mismo bucket de
+backend que la Fase 1), que añade la generación de resúmenes sobre la
+infraestructura ya desplegada sin tocarla — referencia la tabla `articles`
+por nombre en lugar de gestionarla.
+
+```
+DynamoDB Streams (articles) ──► summarize_article (Bedrock Claude Haiku 4.5)
+  INSERT/MODIFY, filtro                 │
+  summary_status=PENDING                ▼
+                              UpdateItem: summary, summary_status=DONE
+                                         │
+                              (fallo) ──►│ summary_status=ERROR, se relanza
+                                         ▼
+                              SQS DLQ (tras agotar reintentos)
+
+EventBridge Scheduler ───────► daily_digest (Bedrock Claude Sonnet)
+  cron 07:00 UTC                        │
+                              Query GSI publish_date-index, filtro DONE
+                                         ▼
+                              DynamoDB `digests` (partición por fecha)
+```
+
+| Pieza | Implementación |
 |---|---|
-| Stream de la tabla, para disparar el resumen por artículo | `articles_table_stream_arn` |
-| GSI por fecha, para el resumen diario | `articles_publish_date_index` |
+| Resumen por artículo | `summarize_article`, consumidor del stream de `articles` (`aws_lambda_event_source_mapping`, filtrado por `eventName` a `INSERT`/`MODIFY`); solo procesa `summary_status = "PENDING"` — evita el bucle infinito al re-disparar su propio `UpdateItem` |
+| Digest diario | `daily_digest`, invocada por `aws_scheduler_schedule` (EventBridge Scheduler, cron `0 7 * * ? *`); Query sobre `publish_date-index`, agrega los artículos con `summary_status = "DONE"` |
+| Modelo | Amazon Bedrock vía boto3 (`bedrock-runtime`), nunca la API de Anthropic directa. Claude Haiku 4.5 para el resumen por artículo, Claude Sonnet para el digest — model id inyectado por variable de entorno (`HAIKU_MODEL_ID` / `SONNET_MODEL_ID`), no hardcodeado. Ambos solo admiten invocación vía *inference profile* de Bedrock, no bajo demanda directo |
+| Reintentos y DLQ | `maximum_retry_attempts = 3` en el event source mapping + `destination_config.on_failure` a una cola SQS: sin este límite finito los reintentos serían indefinidos y la DLQ no llegaría a usarse |
+| IAM | Un rol por Lambda; `bedrock:InvokeModel` acotado al ARN del modelo concreto (Haiku y Sonnet nunca comparten permiso) |
+| Observabilidad | Log Groups a 14 días (mismo criterio que la Fase 1) + alarma sobre `AWS/Lambda Errors` de `summarize_article`, `Sum ≥ 3` en 5 minutos (umbral configurable) |
 
-Además, todo artículo se escribe con `summary: null` y
-`summary_status: "PENDING"`, y `update_article` vuelve a marcarlo como
-`PENDING` cuando cambia `title` o `content`. Detalle en
+Sin envío por email ni notificación externa: el digest queda solo en
+DynamoDB. Detalle completo del prompt en
 [docs/ai-usage/02-fase2-prompt.md](docs/ai-usage/02-fase2-prompt.md).
+
+Para desplegarlo (tras el stack de la Fase 1):
+
+```bash
+cd terraform/ai
+terraform init
+terraform plan
+terraform apply
+```
+
+Para validar el HCL sin credenciales ni backend remoto:
+
+```bash
+terraform init -backend=false && terraform validate
+```
 
 ---
 
@@ -283,6 +347,30 @@ de `key_schema`. Se mantiene `hash_key` a propósito, porque `key_schema` no
 existe en el provider 5.x y el rango declarado (`>= 5.40.0, < 7.0.0`) admite
 ambas versiones mayores.
 
+**Fase 2 (`terraform/ai/`):** desplegada contra la cuenta real (`eu-west-1`).
+
+```
+terraform init / apply (terraform/ai)   → 17 to add, aplicado
+pytest -v                               → 65 passed (57 CRUD + 8 IA)
+```
+
+Dos ajustes que solo se detectan aplicando contra una cuenta real, no con
+`validate`/`plan`:
+
+- El rol de `summarize_article` necesitaba permiso explícito de
+  `dynamodb:DescribeStream` / `GetRecords` / `GetShardIterator` /
+  `ListStreams` sobre el stream — lo exige el *poller* del event source
+  mapping, no el código Python, así que no lo detectaban ni los tests ni
+  `terraform plan`.
+- `sonnet_model_id` apunta a **Claude Sonnet 4.5**, no Sonnet 5: al probar la
+  invocación real, Sonnet 5 devolvió `AccessDeniedException` ("not available
+  for this account... contact AWS Sales") tanto en el inference profile `eu.`
+  como en el `global.`, mientras que Sonnet 4.5 y Haiku 4.5 funcionan sin
+  problema — es una restricción de disponibilidad de esa cuenta AWS
+  concreta, no algo resoluble por Terraform ni por IAM. Cambiar de vuelta es
+  solo actualizar `sonnet_model_id` en `terraform/ai/variables.tf`, sin
+  tocar código.
+
 ## Antes de producción
 
 - `cors_allow_origins` está en `["*"]`; restringirlo a los dos dominios
@@ -292,3 +380,10 @@ ambas versiones mayores.
 - `GET /articles` sin filtro hace `Scan` paginado. Es adecuado para el volumen
   de un MVP y va amortiguado por la caché, pero cuando crezca el archivo la
   portada deberá pedir un `publish_date` concreto y pasar por el GSI.
+- Gestionar con AWS Sales el acceso a Claude Sonnet 5 para esta cuenta y
+  volver a apuntar `sonnet_model_id` a ese modelo cuando esté disponible
+  (hoy usa Claude Sonnet 4.5 como sustituto funcional, ver arriba).
+- `starting_position = "LATEST"` en el event source mapping de
+  `summarize_article`: los artículos que ya existieran con
+  `summary_status = "PENDING"` antes de ese despliegue no se resumen
+  retroactivamente, solo al editarlos.

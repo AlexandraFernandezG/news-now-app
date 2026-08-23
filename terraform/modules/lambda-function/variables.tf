@@ -27,7 +27,7 @@ variable "source_files" {
     ficheros: cada Lambda empaqueta unicamente su propio handler mas el codigo
     comun que necesita, nunca el codigo de las otras operaciones del CRUD.
   EOT
-  type = map(string)
+  type        = map(string)
 }
 
 variable "memory_size" {

@@ -6,8 +6,9 @@ Guía para trabajar en este repositorio. La visión general está en el
 ## Qué es esto
 
 MVP de NewsNow, un periódico digital serverless en AWS. **Fase 1** (entregada):
-infraestructura Terraform + API de artículos. **Fase 2** (pendiente): capa de IA
-para resúmenes — no implementarla salvo petición explícita.
+infraestructura Terraform + API de artículos. **Fase 2** (entregada): capa de
+IA — resumen automático por artículo (`summarize_article`) y digest diario
+(`daily_digest`), sobre Amazon Bedrock.
 
 ## Reglas del proyecto
 
@@ -18,14 +19,22 @@ parece mejorable, decirlo en una frase y seguir con lo especificado.
 **No aplicar Terraform.** `validate` y `plan` son seguros; `apply` y `destroy`
 requieren pedirlo antes, siempre.
 
-**`ai-summarizer/` es territorio de la Fase 2.** Sus ficheros lanzan
-`NotImplementedError` a propósito y sus tests están marcados como `skip`.
+**`ai-summarizer/` contiene los handlers de la Fase 2** (`summarize_article.py`,
+`daily_digest.py`), sueltos y sin `common/`: cada uno se empaqueta como un
+único fichero (ver `source_files` en `terraform/ai/*.tf`). Sus tests viven en
+`ai-summarizer/tests/` y se ejecutan con la misma suite de `pytest`
+(`pytest.ini` incluye ambos `testpaths`), mockeando DynamoDB con `moto` y la
+respuesta de Bedrock a mano.
 
 ## Comandos
 
 ```bash
 # Validar sin credenciales ni backend remoto
 cd terraform && terraform init -backend=false && terraform validate
+
+# terraform/ai/ es un stack independiente (estado propio en la misma cuenta
+# de backend), se valida igual
+cd terraform/ai && terraform init -backend=false && terraform validate
 
 # Formato (el CI lo comprueba con -check)
 terraform fmt -recursive terraform/
