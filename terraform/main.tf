@@ -1,8 +1,8 @@
 ###############################################################################
 # NewsNow - Fase 1: infraestructura base
 #
-#   Lectores  -> CloudFront (+WAF) -> S3 news-public-app        (SPA publica)
-#   Redaccion -> CloudFront        -> S3 news-admin-app         (SPA admin)
+#   Lectores  -> CloudFront (+WAF) -> S3 news-now-public-app    (SPA publica)
+#   Redaccion -> CloudFront        -> S3 news-now-admin-app     (SPA admin)
 #   Ambas     -> CloudFront (cache GET /articles)
 #                  -> API Gateway HTTP API (JWT authorizer Cognito)
 #                     -> 4 Lambdas Python -> DynamoDB `articles` (+ Streams)
@@ -59,9 +59,15 @@ locals {
     var.tags
   )
 
-  # Todas las Lambdas comparten el mismo paquete (src/) para poder importar
-  # src/common; cada una expone un handler distinto.
   lambda_source_dir = "${path.module}/../src"
+
+  # Codigo comun a las 4 Lambdas (conexion a DynamoDB, respuestas HTTP).
+  # Cada modulo lambda-function lo combina con SU UNICO handler propio, para
+  # que el zip de cada funcion no incluya el codigo de las otras operaciones.
+  lambda_common_source_files = {
+    "common/db.py"        = "${local.lambda_source_dir}/common/db.py"
+    "common/responses.py" = "${local.lambda_source_dir}/common/responses.py"
+  }
 
   lambda_environment = {
     ARTICLES_TABLE_NAME = aws_dynamodb_table.articles.name
@@ -114,7 +120,9 @@ module "get_articles" {
   description   = "GET /articles - listado publico de articulos"
   handler       = "articles.get_articles.lambda_handler"
   runtime       = var.lambda_runtime
-  source_dir    = local.lambda_source_dir
+  source_files = merge(local.lambda_common_source_files, {
+    "articles/get_articles.py" = "${local.lambda_source_dir}/articles/get_articles.py"
+  })
 
   memory_size           = var.lambda_memory_size
   timeout               = var.lambda_timeout
@@ -132,7 +140,9 @@ module "create_article" {
   description   = "POST /articles - alta de articulo (requiere JWT)"
   handler       = "articles.create_article.lambda_handler"
   runtime       = var.lambda_runtime
-  source_dir    = local.lambda_source_dir
+  source_files = merge(local.lambda_common_source_files, {
+    "articles/create_article.py" = "${local.lambda_source_dir}/articles/create_article.py"
+  })
 
   memory_size           = var.lambda_memory_size
   timeout               = var.lambda_timeout
@@ -150,7 +160,9 @@ module "update_article" {
   description   = "PUT /articles/{id} - edicion de articulo (requiere JWT)"
   handler       = "articles.update_article.lambda_handler"
   runtime       = var.lambda_runtime
-  source_dir    = local.lambda_source_dir
+  source_files = merge(local.lambda_common_source_files, {
+    "articles/update_article.py" = "${local.lambda_source_dir}/articles/update_article.py"
+  })
 
   memory_size           = var.lambda_memory_size
   timeout               = var.lambda_timeout
@@ -158,7 +170,7 @@ module "update_article" {
   environment_variables = local.lambda_environment
   policy_statements     = local.policy_update_article
 
-  tags = merge(local.common_tags, { Component = "api", Route = "PUT /articles/{id}" })
+  tags = merge(local.common_tags, { Component = "api", Route = "PUT /articles/:id" })
 }
 
 module "delete_article" {
@@ -168,7 +180,9 @@ module "delete_article" {
   description   = "DELETE /articles/{id} - baja de articulo (requiere JWT)"
   handler       = "articles.delete_article.lambda_handler"
   runtime       = var.lambda_runtime
-  source_dir    = local.lambda_source_dir
+  source_files = merge(local.lambda_common_source_files, {
+    "articles/delete_article.py" = "${local.lambda_source_dir}/articles/delete_article.py"
+  })
 
   memory_size           = var.lambda_memory_size
   timeout               = var.lambda_timeout
@@ -176,5 +190,5 @@ module "delete_article" {
   environment_variables = local.lambda_environment
   policy_statements     = local.policy_delete_article
 
-  tags = merge(local.common_tags, { Component = "api", Route = "DELETE /articles/{id}" })
+  tags = merge(local.common_tags, { Component = "api", Route = "DELETE /articles/:id" })
 }

@@ -33,13 +33,13 @@ variable "tags" {
 variable "public_app_bucket_name" {
   description = "Bucket S3 de la app publica de lectura. Debe ser globalmente unico."
   type        = string
-  default     = "news-public-app"
+  default     = "news-now-public-app"
 }
 
 variable "admin_app_bucket_name" {
   description = "Bucket S3 de la app de administracion. Debe ser globalmente unico."
   type        = string
-  default     = "news-admin-app"
+  default     = "news-now-admin-app"
 }
 
 variable "cloudfront_price_class" {

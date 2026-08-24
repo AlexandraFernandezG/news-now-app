@@ -1,0 +1,10 @@
+# Dependencias SOLO para ejecutar los tests en local/CI.
+# No se despliegan: el paquete de cada Lambda (ver terraform/main.tf y
+# terraform/ai/, source_files) nunca incluye este fichero, y boto3 lo aporta
+# el runtime de Lambda en produccion.
+pytest>=8.0,<10.0
+boto3>=1.34,<2.0
+
+# Solo para los tests de ai-summarizer/: simula DynamoDB para no depender de
+# AWS real ni de moto en los tests del CRUD (esos usan unittest.mock).
+moto[dynamodb]>=5.0,<6.0

@@ -29,13 +29,25 @@ locals {
 
 ###############################################################################
 # Empaquetado del codigo
+#
+# El zip se construye fichero a fichero a partir de var.source_files, no
+# comprimiendo un directorio entero: asi cada Lambda despliega solo su propio
+# handler (mas el codigo comun que declare necesitar), sin arrastrar el
+# codigo de las otras operaciones del CRUD.
 ###############################################################################
 
 data "archive_file" "package" {
   type        = "zip"
-  source_dir  = var.source_dir
   output_path = local.package_path
-  excludes    = var.source_excludes
+
+  dynamic "source" {
+    for_each = var.source_files
+
+    content {
+      filename = source.key
+      content  = file(source.value)
+    }
+  }
 }
 
 ###############################################################################
