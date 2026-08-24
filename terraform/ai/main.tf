@@ -4,7 +4,7 @@
 #   Stream `articles` -> summarize_article (Bedrock Haiku) -> UpdateItem
 #                                                              (summary, summary_status)
 #
-#   EventBridge Scheduler (cron 07:00 UTC) -> daily_digest (Bedrock Sonnet)
+#   EventBridge Scheduler (cron 19:00 UTC) -> daily_digest (Bedrock Sonnet)
 #       -> Query GSI publish_date-index -> PutItem en DynamoDB `digests`
 #
 # Stack independiente del de Fase 1 (estado propio, ver backend.tf): añade la

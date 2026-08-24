@@ -149,7 +149,7 @@ variable "sonnet_model_id" {
 variable "daily_digest_schedule_expression" {
   description = "Expresion cron/rate de EventBridge Scheduler para disparar daily_digest"
   type        = string
-  default     = "cron(0 7 * * ? *)" # 07:00 UTC todos los dias
+  default     = "cron(0 19 * * ? *)" # 19:00 UTC todos los dias
 }
 
 ###############################################################################

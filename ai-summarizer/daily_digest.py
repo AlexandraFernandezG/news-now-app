@@ -1,7 +1,7 @@
 """Fase 2 - Resumen diario de la actualidad.
 
 Disparada por EventBridge Scheduler (terraform/ai/daily_digest.tf, cron
-07:00 UTC). Consulta el GSI `publish_date-index` de la tabla `articles` para
+19:00 UTC). Consulta el GSI `publish_date-index` de la tabla `articles` para
 traer lo publicado el dia en curso, se queda solo con los articulos que ya
 tienen resumen (`summary_status == "DONE"`) y le pide a Bedrock (modelo
 Claude Sonnet, ver SONNET_MODEL_ID / terraform/ai/variables.tf) que

@@ -289,7 +289,7 @@ DynamoDB Streams (articles) ──► summarize_article (Bedrock Claude Haiku 4.
                               SQS DLQ (tras agotar reintentos)
 
 EventBridge Scheduler ───────► daily_digest (Bedrock Claude Sonnet)
-  cron 07:00 UTC                        │
+  cron 19:00 UTC                        │
                               Query GSI publish_date-index, filtro DONE
                                          ▼
                               DynamoDB `digests` (partición por fecha)
@@ -298,7 +298,7 @@ EventBridge Scheduler ───────► daily_digest (Bedrock Claude Sonn
 | Pieza | Implementación |
 |---|---|
 | Resumen por artículo | `summarize_article`, consumidor del stream de `articles` (`aws_lambda_event_source_mapping`, filtrado por `eventName` a `INSERT`/`MODIFY`); solo procesa `summary_status = "PENDING"` — evita el bucle infinito al re-disparar su propio `UpdateItem` |
-| Digest diario | `daily_digest`, invocada por `aws_scheduler_schedule` (EventBridge Scheduler, cron `0 7 * * ? *`); Query sobre `publish_date-index`, agrega los artículos con `summary_status = "DONE"` |
+| Digest diario | `daily_digest`, invocada por `aws_scheduler_schedule` (EventBridge Scheduler, cron `0 19 * * ? *`); Query sobre `publish_date-index`, agrega los artículos con `summary_status = "DONE"` |
 | Modelo | Amazon Bedrock vía boto3 (`bedrock-runtime`), nunca la API de Anthropic directa. Claude Haiku 4.5 para el resumen por artículo, Claude Sonnet para el digest — model id inyectado por variable de entorno (`HAIKU_MODEL_ID` / `SONNET_MODEL_ID`), no hardcodeado. Ambos solo admiten invocación vía *inference profile* de Bedrock, no bajo demanda directo |
 | Reintentos y DLQ | `maximum_retry_attempts = 3` en el event source mapping + `destination_config.on_failure` a una cola SQS: sin este límite finito los reintentos serían indefinidos y la DLQ no llegaría a usarse |
 | IAM | Un rol por Lambda; `bedrock:InvokeModel` acotado al ARN del modelo concreto (Haiku y Sonnet nunca comparten permiso) |
