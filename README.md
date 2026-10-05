@@ -4,6 +4,10 @@ MVP de un periódico digital sobre AWS, 100% serverless. **Fase 1**:
 infraestructura como código y la API de artículos. **Fase 2**: capa de IA
 sobre Amazon Bedrock, resumen automático por artículo y digest diario.
 
+# Arquitectura de la Fase 1
+
+![Arquitectura del MVP Fase 1](docs/Arquitectura_PrimeraParte_NewsNow.png)
+
 ---
 
 ## Estructura del repositorio
@@ -156,6 +160,10 @@ inesperado. El cuerpo es siempre `{ "message": "...", "details": {...} }`.
 ---
 
 ## Fase 2 — capa de IA
+
+# Arquitectura de la Fase 2
+
+![Arquitectura del MVP Fase 2](docs/Arquitectura_capa_IA_NewsNow.png)
 
 Stack independiente en `terraform/ai/` (estado propio, mismo bucket de
 backend que la Fase 1), que añade la generación de resúmenes sobre la
